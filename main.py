@@ -140,6 +140,19 @@ class RequestInterceptorApp:
         self.status_var = tk.StringVar(value="Ready")
         ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W).pack(fill=tk.X, side=tk.BOTTOM)
 
+    def check_chromedriver(self):
+        """Check if compatible ChromeDriver exists and download if needed"""
+        try:
+            self.status_var.set("Checking ChromeDriver installation...")
+            chromedriver_path = ChromeDriverManager().install()
+            self.status_var.set(f"ChromeDriver ready at: {chromedriver_path}")
+            return chromedriver_path
+        except Exception as e:
+            self.status_var.set(f"ChromeDriver installation error: {str(e)}")
+            messagebox.showerror("ChromeDriver Error",
+                                 f"Failed to setup ChromeDriver: {str(e)}\n\nPlease check your internet connection and try again.")
+            return None
+
     def setup_url_copying(self):
         # Add right-click context menu
         self.context_menu = tk.Menu(self.tree, tearoff=0)
@@ -187,6 +200,12 @@ class RequestInterceptorApp:
 
     def monitor_requests(self):
         try:
+            # Check ChromeDriver first
+            chromedriver_path = self.check_chromedriver()
+            if not chromedriver_path:
+                self.stop_monitoring()
+                return
+
             # Chrome options
             chrome_options = Options()
             chrome_options.add_argument("--start-maximized")
@@ -205,38 +224,38 @@ class RequestInterceptorApp:
                 }
             })
 
-            # Initialize driver
+            # Initialize driver with the verified ChromeDriver path
             self.driver = webdriver.Chrome(
-                service=Service(ChromeDriverManager().install()),
+                service=Service(chromedriver_path),
                 options=chrome_options
             )
 
             # Execute script to bypass debugger statements
             self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
                 "source": """
-                    // Overwrite the debugger function
-                    Object.defineProperty(window, 'debugger', {
-                        get: function() {
-                            return function() {};
-                        }
-                    });
-    
-                    // Override the Function constructor to disable debugger statements
-                    const originalFunction = Function;
-                    Function = function() {
-                        const args = Array.from(arguments);
-                        const functionBody = args.pop();
-                        if (functionBody && functionBody.includes('debugger')) {
-                            const cleanBody = functionBody.replace(/debugger/g, '// debugger disabled');
-                            return originalFunction(...args, cleanBody);
-                        }
-                        return originalFunction(...arguments);
-                    };
-                    Function.prototype = originalFunction.prototype;
-    
-                    // Notify DevTools that this page has been modified
-                    delete window.__webdriver_script_fn;
-                """
+                // Overwrite the debugger function
+                Object.defineProperty(window, 'debugger', {
+                    get: function() {
+                        return function() {};
+                    }
+                });
+
+                // Override the Function constructor to disable debugger statements
+                const originalFunction = Function;
+                Function = function() {
+                    const args = Array.from(arguments);
+                    const functionBody = args.pop();
+                    if (functionBody && functionBody.includes('debugger')) {
+                        const cleanBody = functionBody.replace(/debugger/g, '// debugger disabled');
+                        return originalFunction(...args, cleanBody);
+                    }
+                    return originalFunction(...arguments);
+                };
+                Function.prototype = originalFunction.prototype;
+
+                // Notify DevTools that this page has been modified
+                delete window.__webdriver_script_fn;
+            """
             })
 
             # Navigate to URL
@@ -251,8 +270,8 @@ class RequestInterceptorApp:
             # Monitor requests
             self.root.after(0, lambda: self.status_var.set("Monitoring for requests..."))
 
-            # Use a more reliable tracking system for processed requests
-            processed_urls = set()  # Track processed URLs
+            # Use a set to track processed requests
+            processed_urls = set()
 
             while self.monitoring:
                 for req in self.driver.requests:
@@ -262,7 +281,6 @@ class RequestInterceptorApp:
                     url = req.url.lower()
 
                     # Create a unique identifier for this request
-                    # Use url + method + response status to identify unique requests
                     req_identifier = f"{req.method}:{url}:{req.response.status_code if req.response else 0}"
 
                     if req_identifier in processed_urls:
